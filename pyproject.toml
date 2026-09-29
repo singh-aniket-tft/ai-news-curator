@@ -1,0 +1,29 @@
+[project]
+name = "ai-news-curator"
+version = "0.1.0"
+description = "Daily multimodal news tracking with event-level deduplication"
+requires-python = ">=3.11"
+dependencies = [
+  "streamlit>=1.40,<2",
+  "google-genai>=1.0,<2",
+  "pydantic>=2,<3",
+  "trafilatura>=2.0,<3",
+  "fastembed>=0.5,<1",
+  "requests>=2.32,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+news-curator = "news_curator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

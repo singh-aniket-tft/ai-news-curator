@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.streamlit/secrets.toml
+*.db
+*.db-shm
+*.db-wal
+logs/
+*.egg-info/
+*.ses
