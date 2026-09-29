@@ -178,7 +178,7 @@ def enrich_article(candidate: Candidate) -> Candidate:
         if len(data) > MAX_HTML:
             return candidate
         html = data.decode(response.encoding or "utf-8", errors="replace")
-        text = trafilatura.extract(html, url=candidate.url, include_comments=False) or ""
+        text = trafilatura.extract(html, url=candidate.url, include_comments=False) or candidate.text
         metadata = trafilatura.extract_metadata(html)
         publication = parse_date(getattr(metadata, "date", None), candidate.published_date)
         image = getattr(metadata, "image", None) or candidate.image_url
