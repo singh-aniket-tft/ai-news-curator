@@ -8,10 +8,7 @@ from collections.abc import Callable, Mapping
 from .storage import Store
 
 
-def make_request_gate(store: Store, config: Mapping | None) -> Callable[[], None] | None:
-    if not config:
-        return None
-
+def make_request_gate(store: Store, config: Mapping) -> Callable[[], None]:
     def gate() -> None:
         while True:
             wait = store.reserve_vlm_request(

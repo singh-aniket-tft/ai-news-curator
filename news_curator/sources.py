@@ -16,10 +16,10 @@ from .models import Candidate, canonical_url
 
 
 LOGGER = logging.getLogger(__name__)
-TIMEOUT = 12
-MAX_HTML = 1_500_000
-SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": "AI-News-Curator/0.1 (research assignment; contact via source link)"})
+HTTP_TIMEOUT_SECONDS = 12
+MAX_HTML_BYTES = 1_500_000
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({"User-Agent": "AI-News-Curator/0.1"})
 
 
 def parse_date(value: str | None, fallback: date | None = None) -> date:
@@ -39,7 +39,7 @@ def parse_date(value: str | None, fallback: date | None = None) -> date:
 
 
 def _get_json(url: str, params: dict[str, object]) -> dict:
-    response = SESSION.get(url, params=params, timeout=TIMEOUT)
+    response = HTTP_SESSION.get(url, params=params, timeout=HTTP_TIMEOUT_SECONDS)
     response.raise_for_status()
     return response.json()
 
@@ -86,9 +86,9 @@ def gdelt_search(topic: str, start_date: date, limit: int = 20) -> list[Candidat
 
 def bing_rss_search(topic: str, start_date: date, limit: int = 20) -> list[Candidate]:
     """Backup public RSS feed; extract the original publisher URL from Bing links."""
-    response = SESSION.get(
+    response = HTTP_SESSION.get(
         "https://www.bing.com/news/search",
-        params={"q": topic.strip(), "format": "rss"}, timeout=TIMEOUT,
+        params={"q": topic.strip(), "format": "rss"}, timeout=HTTP_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     root = ElementTree.fromstring(response.content)
@@ -170,12 +170,12 @@ def enrich_article(candidate: Candidate) -> Candidate:
     if candidate.source_hint == "social":
         return candidate
     try:
-        response = SESSION.get(candidate.url, timeout=TIMEOUT, stream=True)
+        response = HTTP_SESSION.get(candidate.url, timeout=HTTP_TIMEOUT_SECONDS, stream=True)
         response.raise_for_status()
         if "html" not in response.headers.get("content-type", "").lower():
             return candidate
-        data = response.raw.read(MAX_HTML + 1)
-        if len(data) > MAX_HTML:
+        data = response.raw.read(MAX_HTML_BYTES + 1)
+        if len(data) > MAX_HTML_BYTES:
             return candidate
         html = data.decode(response.encoding or "utf-8", errors="replace")
         text = trafilatura.extract(html, url=candidate.url, include_comments=False) or candidate.text
@@ -200,7 +200,7 @@ def download_image(url: str | None) -> tuple[bytes, str] | None:
     if not url or urlsplit(url).scheme not in {"https", "http"}:
         return None
     try:
-        response = SESSION.get(url, timeout=TIMEOUT, stream=True)
+        response = HTTP_SESSION.get(url, timeout=HTTP_TIMEOUT_SECONDS, stream=True)
         response.raise_for_status()
         mime = response.headers.get("content-type", "").split(";", 1)[0].lower()
         if mime not in {"image/jpeg", "image/png", "image/webp"}:

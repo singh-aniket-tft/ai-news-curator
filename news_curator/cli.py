@@ -25,7 +25,7 @@ def main() -> None:
     run.add_argument("--topic-id", type=int)
     run.add_argument("--max-items", type=int, default=20)
     run.add_argument("--max-total-items", type=int, default=20,
-                     help="Maximum VLM analyses across all topics in this invocation")
+                     help="Maximum articles attempted across all topics in this invocation")
     sub.add_parser("list", help="List saved topics")
     args = parser.parse_args()
     store = Store(args.db)
@@ -37,9 +37,6 @@ def main() -> None:
             print(f"#{row['id']} {row['keyword']} since {row['start_date']} sources={row['source_types_json']}")
     else:
         config = store.get_daily_config() if args.daily else None
-        if args.daily and not config:
-            print("Daily run is not configured. Select topics and save daily settings in the app.")
-            return
         topics = store.list_topics(active_only=True)
         if args.topic_id:
             topics = [row for row in topics if row["id"] == args.topic_id]
@@ -54,25 +51,29 @@ def main() -> None:
             if max_total <= 0:
                 print("Configured Gemini daily request quota has been reached")
                 return
-        if max_items < 1 or max_total < 1:
+        if max_items < 1:
+            parser.error("--max-items must be positive")
+        if max_total < 1:
             parser.error("--max-total-items must be positive")
         topics.sort(key=lambda row: (row["last_run_at"] or "", row["id"]))
+        attempted_total = 0
         analyzed_total = 0
         had_errors = False
         for row in topics:
-            remaining = max_total - analyzed_total
+            remaining = max_total - attempted_total
             if remaining <= 0:
                 break
             summary = run_topic(
                 store, row["id"], row["keyword"], date.fromisoformat(row["start_date"]),
                 tuple(json.loads(row["source_types_json"])), min(max_items, remaining),
             )
+            attempted_total += summary.attempted
             analyzed_total += summary.analyzed
             had_errors = had_errors or bool(summary.errors)
             print(json.dumps(summary.__dict__, indent=2))
             if summary.quota_exhausted:
                 break
-        print(f"Analyzed {analyzed_total}/{max_total} items across selected topics")
+        print(f"Analyzed {analyzed_total} items in {attempted_total}/{max_total} attempts across selected topics")
         if had_errors:
             raise SystemExit(1)
 

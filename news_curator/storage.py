@@ -153,10 +153,12 @@ class Store:
         with self.connect() as conn:
             conn.execute("UPDATE topics SET last_run_at=? WHERE id=?", (utc_now().isoformat(), topic_id))
 
-    def get_daily_config(self) -> dict[str, Any] | None:
+    def get_daily_config(self) -> dict[str, Any]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM daily_config WHERE id=1").fetchone()
-        return dict(row) if row else None
+        if row is None:
+            raise RuntimeError("Daily settings are missing from the database")
+        return dict(row)
 
     def configure_daily(
         self, model: str, requests_per_day: int, requests_per_minute: int,

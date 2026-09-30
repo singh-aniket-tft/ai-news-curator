@@ -36,7 +36,8 @@ def cosine(left: list[float], right: list[float]) -> float:
 
 
 def _tokens(value: str) -> set[str]:
-    return {part.casefold().strip(".,:;()[]{}\"'") for part in value.split() if len(part) > 2}
+    cleaned = (part.casefold().strip(".,:;()[]{}\"'") for part in value.split())
+    return {part for part in cleaned if len(part) > 2}
 
 
 _PHASE_WORDS = {

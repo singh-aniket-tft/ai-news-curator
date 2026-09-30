@@ -15,7 +15,7 @@ def test_enrichment_keeps_rss_snippet_when_html_has_no_extractable_text(monkeypa
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr("news_curator.sources.SESSION.get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr("news_curator.sources.HTTP_SESSION.get", lambda *args, **kwargs: Response())
     monkeypatch.setattr("news_curator.sources.trafilatura.extract", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "news_curator.sources.trafilatura.extract_metadata",

@@ -26,6 +26,7 @@ class Analyzer(Protocol):
 class RunSummary:
     topic_id: int
     discovered: int = 0
+    attempted: int = 0
     analyzed: int = 0
     new_events: int = 0
     updated_events: int = 0
@@ -77,13 +78,11 @@ def run_topic(
         from .quota import make_request_gate
         config = store.get_daily_config()
         analyzer = GeminiAnalyzer(
-            model=config["model"] if config else None,
-            request_gate=make_request_gate(store, config) if config else None,
+            model=config["model"], request_gate=make_request_gate(store, config),
         )
-    embedder = embedder or LocalEmbedder()
     unique_urls: set[str] = set()
     for raw in collected:
-        if result.analyzed >= max_items:
+        if result.attempted >= max_items:
             break
         try:
             normalized = raw.normalized_url
@@ -96,12 +95,15 @@ def run_topic(
                 store.mark_processed(topic_id, normalized, "before_start_date")
                 result.skipped += 1
                 continue
-            result.analyzed += 1
+            result.attempted += 1
             analysis = analyzer.analyze(topic, candidate)
+            result.analyzed += 1
             if not analysis.relevant or analysis.source_type not in source_types:
                 store.mark_processed(topic_id, normalized, "filtered")
                 result.skipped += 1
                 continue
+            if embedder is None:
+                embedder = LocalEmbedder()
             vector = embedder.embed(analysis.embedding_text)
             match_id = find_event_match(analysis, vector, store.event_candidates(topic_id))
             _, inserted = store.add_finding(

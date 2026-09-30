@@ -28,7 +28,7 @@ used_requests = store.used_vlm_requests_today(daily_config["model"])
 
 with st.sidebar:
     st.header("Run settings")
-    st.write("Model:", os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"))
+    st.write("Model:", daily_config["model"])
     st.write("Storage: local SQLite")
     session_key = st.text_input(
         "Gemini API key (optional if set in environment)", type="password",
@@ -73,7 +73,7 @@ def run_and_report(topic_id: int, keyword: str, since: date, types: tuple[str, .
                 ),
             )
             st.write(
-                f"Found {summary.discovered}; analyzed {summary.analyzed}; "
+                f"Found {summary.discovered}; attempted {summary.attempted}; analyzed {summary.analyzed}; "
                 f"created {summary.new_events} events; updated {summary.updated_events} events."
             )
             for error in summary.errors:
@@ -130,9 +130,9 @@ if topics:
                 value=min(500, daily_config["articles_per_topic"]), step=1,
             )
         st.caption(
-            "This project's AI Studio screenshot shows 500 requests/day, 15 requests/minute, "
-            "and 250,000 input tokens/minute. Each retry also consumes a request. "
-            "These are local caps; check AI Studio if this project is shared."
+            f"Configured for {daily_config['model']}: up to 500 requests/day, 15 requests/minute, "
+            f"and {daily_config['tokens_per_minute']:,} input tokens/minute. "
+            "The app counts its own requests and retries. Check AI Studio for total project usage."
         )
         save_daily = st.form_submit_button("Save daily topic selection and limits")
     if save_daily:

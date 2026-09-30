@@ -50,16 +50,40 @@ def test_same_event_updates_one_row_and_distinct_publisher_count(tmp_path):
     assert store.list_events(topic_id)[0]["mention_count"] == 1
 
 
-def test_source_filter_skips_row_and_remembers_url(tmp_path):
+def test_source_filter_skips_row_without_loading_embedding_model(tmp_path, monkeypatch):
     store = Store(tmp_path / "events.db")
     types = (SourceType.OFFICIAL.value,)
     topic_id = store.get_or_create_topic("battery", date(2026, 9, 20), types)
     search = lambda topic, since, limit: [article("https://paper-a.test/story", "Paper A")]
-    kwargs = dict(analyzer=FakeAnalyzer(), embedder=FakeEmbedder(), news_search=search, enrich=lambda x: x)
+    def unexpected_embedding_model():
+        raise AssertionError("Embedding model should load only for relevant findings")
+
+    monkeypatch.setattr("news_curator.pipeline.LocalEmbedder", unexpected_embedding_model)
+    kwargs = dict(analyzer=FakeAnalyzer(), news_search=search, enrich=lambda x: x)
     first = run_topic(store, topic_id, "battery", date(2026, 9, 20), types, **kwargs)
     second = run_topic(store, topic_id, "battery", date(2026, 9, 20), types, **kwargs)
     assert first.analyzed == 1
     assert second.analyzed == 0
+    assert store.list_events(topic_id) == []
+
+
+def test_failed_analysis_is_reported_without_counting_as_analyzed(tmp_path):
+    store = Store(tmp_path / "events.db")
+    types = (SourceType.OTHER.value,)
+    topic_id = store.get_or_create_topic("battery", date(2026, 9, 20), types)
+
+    class FailingAnalyzer:
+        def analyze(self, topic, candidate):
+            raise RuntimeError("Model unavailable")
+
+    result = run_topic(
+        store, topic_id, "battery", date(2026, 9, 20), types,
+        analyzer=FailingAnalyzer(), news_search=lambda *args, **kwargs: [
+            article("https://paper-a.test/story", "Paper A")
+        ], enrich=lambda item: item,
+    )
+    assert (result.attempted, result.analyzed) == (1, 0)
+    assert len(result.errors) == 1
     assert store.list_events(topic_id) == []
 
 
