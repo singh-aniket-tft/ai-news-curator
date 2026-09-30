@@ -10,3 +10,4 @@ __pycache__/
 logs/
 *.egg-info/
 *.ses
+.DS_Store

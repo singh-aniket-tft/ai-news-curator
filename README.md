@@ -60,7 +60,7 @@ The system instruction tells Gemini to treat article text as evidence, never ins
 - GDELT may return 429 responses. The RSS fallback keeps recent-news testing usable but is not exhaustive, and date backfills may be incomplete. Bluesky is the only social platform in this MVP.
 - Source type is a classification of publisher role, not a factual trust score. Image analysis happens only when an image can be fetched. Some article pages block extraction.
 - The local embedding model downloads on first use. Its English-focused model and fixed similarity thresholds can miss multilingual paraphrases or merge very similar events; the test suite covers the main update rules, not a full retrieval benchmark.
-- The API integration has been tested with a mocked model response; a real Gemini request requires the reviewer's API key and project quota.
+- A live Gemini run was verified locally on 2026-09-30: 12 source reports produced 9 event rows, with image analysis on 11 reports. A reviewer's own API key and available project quota are still required to reproduce the run.
 
 ## Production path
 

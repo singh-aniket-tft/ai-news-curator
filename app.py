@@ -108,7 +108,7 @@ if topics:
             for row in event_rows
         ]
         st.dataframe(
-            display, use_container_width=True, hide_index=True,
+            display, width="stretch", hide_index=True,
             column_config={"Source Link": st.column_config.LinkColumn("Source Link", display_text="Open source")},
         )
         csv_buffer = io.StringIO()
