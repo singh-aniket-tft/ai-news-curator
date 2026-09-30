@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .models import Analysis, Candidate, utc_now
 
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS topics (
     keyword TEXT NOT NULL,
     start_date TEXT NOT NULL,
     source_types_json TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     last_run_at TEXT,
     UNIQUE(keyword, start_date, source_types_json)
@@ -64,7 +66,33 @@ CREATE TABLE IF NOT EXISTS processed_urls (
     processed_at TEXT NOT NULL,
     PRIMARY KEY(topic_id, canonical_url)
 );
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS daily_config (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    model TEXT NOT NULL,
+    requests_per_day INTEGER NOT NULL,
+    requests_per_minute INTEGER NOT NULL,
+    tokens_per_minute INTEGER NOT NULL,
+    articles_per_topic INTEGER NOT NULL,
+    articles_per_day INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vlm_requests (
+    id INTEGER PRIMARY KEY,
+    model TEXT NOT NULL,
+    pacific_day TEXT NOT NULL,
+    requested_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vlm_requests_day ON vlm_requests(model, pacific_day);
+CREATE INDEX IF NOT EXISTS idx_vlm_requests_time ON vlm_requests(model, requested_at);
 """
+
+
+class QuotaExceeded(RuntimeError):
+    """The locally configured Gemini request budget is exhausted."""
 
 
 class Store:
@@ -76,6 +104,21 @@ class Store:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
             if "event_phase" not in columns:
                 conn.execute("ALTER TABLE events ADD COLUMN event_phase TEXT NOT NULL DEFAULT 'other'")
+            migrated = conn.execute(
+                "SELECT 1 FROM metadata WHERE key='explicit_daily_selection_v1'"
+            ).fetchone()
+            if not migrated:
+                # Earlier versions automatically scheduled every saved test topic.
+                conn.execute("UPDATE topics SET active=0")
+                conn.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('explicit_daily_selection_v1', 'done')"
+                )
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_config(id, model, requests_per_day, requests_per_minute, "
+                "tokens_per_minute, articles_per_topic, articles_per_day, updated_at) "
+                "VALUES (1, ?, 500, 15, 250000, 20, 20, ?)",
+                (os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"), utc_now().isoformat()),
+            )
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30)
@@ -110,9 +153,75 @@ class Store:
         with self.connect() as conn:
             conn.execute("UPDATE topics SET last_run_at=? WHERE id=?", (utc_now().isoformat(), topic_id))
 
-    def set_active(self, topic_id: int, active: bool) -> None:
+    def get_daily_config(self) -> dict[str, Any] | None:
         with self.connect() as conn:
-            conn.execute("UPDATE topics SET active=? WHERE id=?", (int(active), topic_id))
+            row = conn.execute("SELECT * FROM daily_config WHERE id=1").fetchone()
+        return dict(row) if row else None
+
+    def configure_daily(
+        self, model: str, requests_per_day: int, requests_per_minute: int,
+        tokens_per_minute: int, articles_per_topic: int, articles_per_day: int,
+        selected_topic_ids: set[int],
+    ) -> None:
+        if min(requests_per_day, requests_per_minute, tokens_per_minute, articles_per_topic, articles_per_day) < 1:
+            raise ValueError("Quota and article limits must be positive")
+        if articles_per_topic > articles_per_day or articles_per_day > requests_per_day:
+            raise ValueError("Article limits must not exceed the configured free request quota")
+        with self.connect() as conn:
+            existing_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM topics")}
+            if not selected_topic_ids <= existing_ids:
+                raise ValueError("An unknown topic was selected")
+            conn.execute("UPDATE topics SET active=0")
+            if selected_topic_ids:
+                marks = ",".join("?" for _ in selected_topic_ids)
+                conn.execute(f"UPDATE topics SET active=1 WHERE id IN ({marks})", tuple(selected_topic_ids))
+            conn.execute(
+                "INSERT INTO daily_config(id, model, requests_per_day, requests_per_minute, "
+                "tokens_per_minute, articles_per_topic, articles_per_day, updated_at) "
+                "VALUES (1, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET model=excluded.model, "
+                "requests_per_day=excluded.requests_per_day, requests_per_minute=excluded.requests_per_minute, "
+                "tokens_per_minute=excluded.tokens_per_minute, articles_per_topic=excluded.articles_per_topic, "
+                "articles_per_day=excluded.articles_per_day, updated_at=excluded.updated_at",
+                (model, requests_per_day, requests_per_minute, tokens_per_minute,
+                 articles_per_topic, articles_per_day, utc_now().isoformat()),
+            )
+
+    def used_vlm_requests_today(self, model: str) -> int:
+        pacific_day = utc_now().astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS used FROM vlm_requests WHERE model=? AND pacific_day=?",
+                (model, pacific_day),
+            ).fetchone()
+        return int(row["used"])
+
+    def reserve_vlm_request(self, model: str, requests_per_day: int, requests_per_minute: int) -> float:
+        """Reserve one SDK request; return seconds to wait if the minute is full."""
+        now = utc_now()
+        pacific_day = now.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
+        cutoff = (now - timedelta(seconds=60)).isoformat()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            used = conn.execute(
+                "SELECT COUNT(*) AS used FROM vlm_requests WHERE model=? AND pacific_day=?",
+                (model, pacific_day),
+            ).fetchone()["used"]
+            if used >= requests_per_day:
+                raise QuotaExceeded("Configured Gemini daily request quota has been reached")
+            recent = conn.execute(
+                "SELECT requested_at FROM vlm_requests WHERE model=? AND requested_at>? "
+                "ORDER BY requested_at ASC",
+                (model, cutoff),
+            ).fetchall()
+            if len(recent) >= requests_per_minute:
+                oldest = datetime.fromisoformat(recent[0]["requested_at"])
+                return max(0.1, 60 - (now - oldest).total_seconds() + 0.1)
+            conn.execute(
+                "INSERT INTO vlm_requests(model, pacific_day, requested_at) VALUES (?, ?, ?)",
+                (model, pacific_day, now.isoformat()),
+            )
+        return 0.0
 
     def seen_url(self, topic_id: int, url: str) -> bool:
         with self.connect() as conn:

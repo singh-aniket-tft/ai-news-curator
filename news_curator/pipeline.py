@@ -11,7 +11,7 @@ from typing import Protocol
 from .dedup import Embedder, LocalEmbedder, find_event_match
 from .models import Analysis, Candidate, SourceType, publisher_key
 from .sources import bluesky_search, discover_news, enrich_article
-from .storage import Store
+from .storage import QuotaExceeded, Store
 from .vlm import GeminiAnalyzer
 
 
@@ -30,6 +30,7 @@ class RunSummary:
     new_events: int = 0
     updated_events: int = 0
     skipped: int = 0
+    quota_exhausted: bool = False
     errors: list[str] = field(default_factory=list)
 
 
@@ -52,8 +53,8 @@ def run_topic(
     social_search=bluesky_search,
     enrich=enrich_article,
 ) -> RunSummary:
-    if max_items < 1 or max_items > 50:
-        raise ValueError("max_items must be between 1 and 50")
+    if max_items < 1:
+        raise ValueError("max_items must be positive")
     result = RunSummary(topic_id=topic_id)
     news: list[Candidate] = []
     social: list[Candidate] = []
@@ -64,7 +65,7 @@ def run_topic(
             result.errors.append(f"News search: {exc}")
     if SourceType.SOCIAL.value in source_types:
         try:
-            social = social_search(topic, start_date, limit=min(max_items, 10))
+            social = social_search(topic, start_date, limit=min(max_items, 100))
         except Exception as exc:
             result.errors.append(f"Social search: {exc}")
     collected = [item for pair in zip_longest(news, social) for item in pair if item is not None]
@@ -72,7 +73,13 @@ def run_topic(
     if not collected:
         store.mark_run(topic_id)
         return result
-    analyzer = analyzer or GeminiAnalyzer()
+    if analyzer is None:
+        from .quota import make_request_gate
+        config = store.get_daily_config()
+        analyzer = GeminiAnalyzer(
+            model=config["model"] if config else None,
+            request_gate=make_request_gate(store, config) if config else None,
+        )
     embedder = embedder or LocalEmbedder()
     unique_urls: set[str] = set()
     for raw in collected:
@@ -108,6 +115,10 @@ def run_topic(
                     result.updated_events += 1
             else:
                 result.skipped += 1
+        except QuotaExceeded as exc:
+            result.quota_exhausted = True
+            result.errors.append(str(exc))
+            break
         except Exception as exc:
             LOGGER.exception("Failed to process %s", raw.url)
             result.errors.append(f"{raw.url}: {exc}")

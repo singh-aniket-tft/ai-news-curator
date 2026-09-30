@@ -6,7 +6,7 @@ import os
 import re
 import time
 from datetime import date
-from typing import Literal
+from typing import Callable, Literal
 
 from google import genai
 from google.genai import types
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from .models import Analysis, Candidate
 from .sources import download_image
+from .storage import QuotaExceeded
 
 
 class ExtractedEvent(BaseModel):
@@ -50,12 +51,14 @@ def redact_contact_info(text: str) -> str:
 
 
 class GeminiAnalyzer:
-    def __init__(self, api_key: str | None = None, model: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None,
+                 request_gate: Callable[[], None] | None = None):
         key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not key:
             raise RuntimeError("Set GEMINI_API_KEY to enable live VLM analysis")
         self.client = genai.Client(api_key=key)
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        self.request_gate = request_gate
 
     def analyze(self, topic: str, candidate: Candidate) -> Analysis:
         image = download_image(candidate.image_url)
@@ -72,6 +75,8 @@ class GeminiAnalyzer:
             contents.append(types.Part.from_bytes(data=image[0], mime_type=image[1]))
         for attempt in range(3):
             try:
+                if getattr(self, "request_gate", None):
+                    self.request_gate()
                 response = self.client.models.generate_content(
                     model=self.model,
                     contents=contents,
@@ -98,8 +103,14 @@ class GeminiAnalyzer:
                     evidence=data.evidence,
                 )
             except Exception as exc:
-                transient = any(token in str(exc).lower() for token in ("429", "503", "unavailable", "resource_exhausted"))
+                message = str(exc).lower()
+                provider_quota = "429" in message or "resource_exhausted" in message
+                transient = provider_quota or "503" in message or "unavailable" in message
                 if not transient or attempt == 2:
+                    if provider_quota:
+                        raise QuotaExceeded(
+                            "Gemini rejected the request at the project's rate limit; check AI Studio usage"
+                        ) from exc
                     raise
                 time.sleep(2 ** attempt)
         raise AssertionError("Unreachable")

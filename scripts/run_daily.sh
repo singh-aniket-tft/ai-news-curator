@@ -14,6 +14,4 @@ if [[ -z "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]]; then
   exit 2
 fi
 
-exec .venv/bin/news-curator run \
-  --max-items "${MAX_ITEMS_PER_TOPIC:-3}" \
-  --max-total-items "${MAX_TOTAL_ITEMS_PER_DAY:-20}"
+exec .venv/bin/news-curator run --daily

@@ -1,7 +1,10 @@
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from news_curator.models import Candidate
+from news_curator.storage import QuotaExceeded
 from news_curator.vlm import ExtractedEvent, GeminiAnalyzer, redact_contact_info
 
 
@@ -32,3 +35,23 @@ def test_contact_redaction():
     result = redact_contact_info("Contact jane@example.com or +1 555 123 4567")
     assert "jane@example.com" not in result
     assert "555" not in result
+
+
+def test_provider_rate_limit_stops_after_counted_retries(monkeypatch):
+    calls = []
+    analyzer = object.__new__(GeminiAnalyzer)
+
+    def generate_content(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    analyzer.client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    analyzer.model = "gemini-3.5-flash-lite"
+    analyzer.request_gate = lambda: calls.append("reserved")
+    monkeypatch.setattr("news_curator.vlm.download_image", lambda url: None)
+    monkeypatch.setattr("news_curator.vlm.time.sleep", lambda seconds: None)
+    candidate = Candidate("https://agency.test/report", "Report", date(2026, 9, 28),
+                          "Agency", "Public report text")
+    with pytest.raises(QuotaExceeded):
+        analyzer.analyze("topic", candidate)
+    assert calls.count("reserved") == 3

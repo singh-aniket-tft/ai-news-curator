@@ -12,6 +12,7 @@ import streamlit as st
 
 from news_curator.models import SOURCE_TYPES
 from news_curator.pipeline import run_topic
+from news_curator.quota import make_request_gate
 from news_curator.storage import Store
 from news_curator.vlm import GeminiAnalyzer
 
@@ -22,6 +23,8 @@ st.caption("Track one event per row, with every independent report retained as e
 
 db_path = os.getenv("NEWS_CURATOR_DB", "news_curator.db")
 store = Store(db_path)
+daily_config = store.get_daily_config()
+used_requests = store.used_vlm_requests_today(daily_config["model"])
 
 with st.sidebar:
     st.header("Run settings")
@@ -32,6 +35,10 @@ with st.sidebar:
         help="Used only for this session; it is not saved in the database.",
     )
     st.caption("This app sends public article excerpts and available images to Gemini. Do not enter private or sensitive topics.")
+    st.caption(
+        f"App-recorded Gemini requests today: {used_requests}/{daily_config['requests_per_day']} "
+        f"(Pacific day). Other use of the same Google project is not included."
+    )
 
 with st.form("research"):
     topic = st.text_input("Topic or keyword", placeholder="e.g. electric vehicle battery policy")
@@ -40,7 +47,11 @@ with st.form("research"):
         start_date = st.date_input("Search from", value=date.today() - timedelta(days=7), max_value=date.today())
     with col2:
         source_types = st.multiselect("Source types", SOURCE_TYPES, default=list(SOURCE_TYPES))
-    max_items = st.slider("Maximum new articles/posts to analyze this run", 1, 50, 20)
+    max_items = st.number_input(
+        "Maximum new articles/posts to analyze this run", min_value=1,
+        max_value=daily_config["requests_per_day"], value=min(20, daily_config["requests_per_day"]),
+        step=1,
+    )
     submitted = st.form_submit_button("Save topic and run now", type="primary")
 
 
@@ -48,11 +59,18 @@ def run_and_report(topic_id: int, keyword: str, since: date, types: tuple[str, .
     if not session_key and not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
         st.error("Set GEMINI_API_KEY before running live VLM analysis. See README.md.")
         return
+    available = daily_config["requests_per_day"] - store.used_vlm_requests_today(daily_config["model"])
+    if available <= 0:
+        st.error("The configured Gemini daily request budget is exhausted. It resets at midnight Pacific time.")
+        return
     with st.status("Discovering and analyzing sources...", expanded=True) as status:
         try:
             summary = run_topic(
-                store, topic_id, keyword, since, types, max_items,
-                analyzer=GeminiAnalyzer(api_key=session_key or None),
+                store, topic_id, keyword, since, types, min(max_items, available),
+                analyzer=GeminiAnalyzer(
+                    api_key=session_key or None, model=daily_config["model"],
+                    request_gate=make_request_gate(store, daily_config),
+                ),
             )
             st.write(
                 f"Found {summary.discovered}; analyzed {summary.analyzed}; "
@@ -60,7 +78,8 @@ def run_and_report(topic_id: int, keyword: str, since: date, types: tuple[str, .
             )
             for error in summary.errors:
                 st.warning(error)
-            status.update(label="Run complete", state="complete")
+            status.update(label="Stopped at quota" if summary.quota_exhausted else "Run complete",
+                          state="error" if summary.quota_exhausted else "complete")
         except Exception as exc:
             status.update(label="Run failed", state="error")
             st.error(str(exc))
@@ -78,8 +97,58 @@ if submitted:
 
 topics = store.list_topics()
 if topics:
+    st.subheader("Daily tracking settings")
+    daily_labels = {
+        f"#{row['id']} · {row['keyword']} · since {row['start_date']} · "
+        f"{', '.join(json.loads(row['source_types_json']))}": row["id"]
+        for row in topics
+    }
+    selected_ids = {row["id"] for row in topics if row["active"]}
+    selected_labels = [label for label, topic_id in daily_labels.items() if topic_id in selected_ids]
+    with st.form("daily_settings"):
+        chosen_labels = st.multiselect(
+            "Topics to track automatically every day", list(daily_labels), default=selected_labels,
+            help="Only these topics are processed by the 08:00 daily scheduler.",
+        )
+        quota_col, minute_col = st.columns(2)
+        with quota_col:
+            requests_per_day = st.number_input(
+                "Gemini free requests/day", min_value=1, max_value=500,
+                value=min(500, daily_config["requests_per_day"]), step=1,
+            )
+            articles_per_day = st.number_input(
+                "Maximum articles/posts across selected topics per daily run",
+                min_value=1, max_value=500, value=min(500, daily_config["articles_per_day"]), step=1,
+            )
+        with minute_col:
+            requests_per_minute = st.number_input(
+                "Gemini requests/minute", min_value=1, max_value=15,
+                value=min(15, daily_config["requests_per_minute"]), step=1,
+            )
+            articles_per_topic = st.number_input(
+                "Maximum articles/posts per selected topic", min_value=1, max_value=500,
+                value=min(500, daily_config["articles_per_topic"]), step=1,
+            )
+        st.caption(
+            "This project's AI Studio screenshot shows 500 requests/day, 15 requests/minute, "
+            "and 250,000 input tokens/minute. Each retry also consumes a request. "
+            "These are local caps; check AI Studio if this project is shared."
+        )
+        save_daily = st.form_submit_button("Save daily topic selection and limits")
+    if save_daily:
+        try:
+            store.configure_daily(
+                daily_config["model"], requests_per_day, requests_per_minute,
+                daily_config["tokens_per_minute"], articles_per_topic, articles_per_day,
+                {daily_labels[label] for label in chosen_labels},
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
     topic_by_label = {
-        f"{row['keyword']} · since {row['start_date']} · {', '.join(json.loads(row['source_types_json']))}": row
+        f"#{row['id']} · {row['keyword']} · since {row['start_date']} · "
+        f"{', '.join(json.loads(row['source_types_json']))}": row
         for row in topics
     }
     labels = list(topic_by_label)
@@ -87,11 +156,7 @@ if topics:
     default_index = next((i for i, label in enumerate(labels) if topic_by_label[label]["id"] == selected_id), 0)
     selected_label = st.selectbox("Tracked topic", labels, index=default_index)
     selected_topic = topic_by_label[selected_label]
-    daily_enabled = bool(selected_topic["active"])
-    st.caption(f"Automatic daily tracking: {'on' if daily_enabled else 'paused'}")
-    if st.button("Pause daily tracking" if daily_enabled else "Resume daily tracking"):
-        store.set_active(selected_topic["id"], not daily_enabled)
-        st.rerun()
+    st.caption(f"Automatic daily tracking: {'selected' if selected_topic['active'] else 'not selected'}")
     if st.button("Run selected topic again"):
         run_and_report(
             selected_topic["id"], selected_topic["keyword"],
