@@ -87,6 +87,11 @@ if topics:
     default_index = next((i for i, label in enumerate(labels) if topic_by_label[label]["id"] == selected_id), 0)
     selected_label = st.selectbox("Tracked topic", labels, index=default_index)
     selected_topic = topic_by_label[selected_label]
+    daily_enabled = bool(selected_topic["active"])
+    st.caption(f"Automatic daily tracking: {'on' if daily_enabled else 'paused'}")
+    if st.button("Pause daily tracking" if daily_enabled else "Resume daily tracking"):
+        store.set_active(selected_topic["id"], not daily_enabled)
+        st.rerun()
     if st.button("Run selected topic again"):
         run_and_report(
             selected_topic["id"], selected_topic["keyword"],
