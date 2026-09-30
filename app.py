@@ -192,12 +192,23 @@ if topics:
         selected_event = event_by_label[detail_label]
         st.write(selected_event["event_summary"])
         if selected_event["image_observation"]:
-            st.info("Visual evidence: " + selected_event["image_observation"])
+            st.info("Latest visual observation: " + selected_event["image_observation"])
         for mention in store.list_mentions(selected_event["id"]):
             st.markdown(
                 f"- [{mention['title'] or mention['source_link']}]({mention['source_link']}) "
                 f"— {mention['publisher_key']}, {mention['publication_date']}"
             )
+            visible_text = json.loads(mention["image_text_json"])
+            if mention["image_analyzed"] and (mention["image_observation"] or visible_text):
+                with st.expander(f"Image findings from {mention['publisher_key']}"):
+                    if mention["image_url"]:
+                        st.link_button("View source image", mention["image_url"])
+                    if mention["image_observation"]:
+                        st.write(mention["image_observation"])
+                    if visible_text:
+                        st.caption("Text read from image by Gemini; verify against the source image.")
+                        for line in visible_text:
+                            st.text(line)
     else:
         st.info("No matching events yet. Run the topic to populate the table.")
 else:

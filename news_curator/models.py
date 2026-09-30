@@ -82,6 +82,7 @@ class Analysis:
     image_analyzed: bool = False
     evidence: str = ""
     event_phase: str = EventPhase.OTHER.value
+    image_text: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.source_type not in SOURCE_TYPES:
@@ -90,6 +91,8 @@ class Analysis:
             raise ValueError(f"Invalid event phase: {self.event_phase}")
         if self.relevant and (not self.event_title.strip() or not self.event_summary.strip()):
             raise ValueError("Relevant findings require an event title and summary")
+        if not self.image_analyzed and (self.image_observation or self.image_text):
+            raise ValueError("Image findings require an analyzed image")
 
     @property
     def embedding_text(self) -> str:

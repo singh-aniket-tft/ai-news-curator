@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS mentions (
     source_type TEXT NOT NULL,
     image_url TEXT,
     image_analyzed INTEGER NOT NULL,
+    image_observation TEXT NOT NULL DEFAULT '',
+    image_text_json TEXT NOT NULL DEFAULT '[]',
     evidence TEXT NOT NULL,
     first_seen_at TEXT NOT NULL,
     UNIQUE(event_id, canonical_url)
@@ -104,6 +106,11 @@ class Store:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
             if "event_phase" not in columns:
                 conn.execute("ALTER TABLE events ADD COLUMN event_phase TEXT NOT NULL DEFAULT 'other'")
+            mention_columns = {row["name"] for row in conn.execute("PRAGMA table_info(mentions)")}
+            if "image_observation" not in mention_columns:
+                conn.execute("ALTER TABLE mentions ADD COLUMN image_observation TEXT NOT NULL DEFAULT ''")
+            if "image_text_json" not in mention_columns:
+                conn.execute("ALTER TABLE mentions ADD COLUMN image_text_json TEXT NOT NULL DEFAULT '[]'")
             migrated = conn.execute(
                 "SELECT 1 FROM metadata WHERE key='explicit_daily_selection_v1'"
             ).fetchone()
@@ -303,12 +310,14 @@ class Store:
                 )
             conn.execute(
                 "INSERT INTO mentions(event_id, canonical_url, source_link, publisher_key, title, "
-                "publication_date, source_type, image_url, image_analyzed, evidence, first_seen_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "publication_date, source_type, image_url, image_analyzed, image_observation, "
+                "image_text_json, evidence, first_seen_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event_id, url, candidate.url, publisher_identity, candidate.title,
                     candidate.published_date.isoformat(), analysis.source_type, candidate.image_url,
-                    int(analysis.image_analyzed), analysis.evidence, now,
+                    int(analysis.image_analyzed), analysis.image_observation,
+                    json.dumps(analysis.image_text), analysis.evidence, now,
                 ),
             )
             conn.execute(
@@ -332,7 +341,8 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT source_link, publisher_key, title, publication_date, source_type, "
-                "image_url, image_analyzed, evidence FROM mentions WHERE event_id=? "
+                "image_url, image_analyzed, image_observation, image_text_json, evidence "
+                "FROM mentions WHERE event_id=? "
                 "ORDER BY publication_date ASC, id ASC",
                 (event_id,),
             ).fetchall()
