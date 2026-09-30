@@ -82,3 +82,24 @@ def test_new_report_moves_existing_event_to_top(tmp_path):
     rows = store.list_events(topic_id)
     assert [row["id"] for row in rows] == [first_id, second_id]
     assert rows[0]["mention_count"] == 1
+
+
+def test_social_posts_get_analysis_slots_alongside_news(tmp_path):
+    store = Store(tmp_path / "events.db")
+    types = (SourceType.OTHER.value, SourceType.SOCIAL.value)
+    topic_id = store.get_or_create_topic("battery", date(2026, 9, 20), types)
+    news = [article(f"https://paper-{n}.test/story", f"Paper {n}") for n in range(3)]
+    social = [Candidate(f"https://bsky.app/profile/user{n}.test/post/abc{n}",
+                        "Battery rule approved", date(2026, 9, 25), f"user{n}.test",
+                        "Battery rule approved", source_hint="social") for n in range(3)]
+    summary = run_topic(
+        store, topic_id, "battery", date(2026, 9, 20), types, max_items=3,
+        analyzer=FakeAnalyzer(), embedder=FakeEmbedder(),
+        news_search=lambda *args, **kwargs: news,
+        social_search=lambda *args, **kwargs: social,
+        enrich=lambda x: x,
+    )
+    assert summary.analyzed == 3
+    links = [mention["source_link"] for event in store.list_events(topic_id)
+             for mention in store.list_mentions(event["id"])]
+    assert any(link.startswith("https://bsky.app/") for link in links)

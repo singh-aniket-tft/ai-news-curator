@@ -9,4 +9,11 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-exec .venv/bin/news-curator run --max-items "${MAX_ITEMS_PER_TOPIC:-20}"
+if [[ -z "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]]; then
+  echo "No Gemini API key configured for the daily run. Run scripts/configure_daily_key.sh first." >&2
+  exit 2
+fi
+
+exec .venv/bin/news-curator run \
+  --max-items "${MAX_ITEMS_PER_TOPIC:-3}" \
+  --max-total-items "${MAX_TOTAL_ITEMS_PER_DAY:-20}"

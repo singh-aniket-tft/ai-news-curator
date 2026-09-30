@@ -32,13 +32,15 @@ The UI saves each topic and its filters. The same pipeline runs from the command
 .venv/bin/news-curator run --max-items 20
 ```
 
-For unattended local runs, put `GEMINI_API_KEY=...` in a gitignored `.env` file and schedule `scripts/run_daily.sh` with cron. Example for 08:00 each day (replace the absolute path):
+On macOS, configure a **new** key for unattended runs and install the user LaunchAgent with one command in Terminal:
 
-```cron
-0 8 * * * /ABS/PATH/ai-news-curator/scripts/run_daily.sh >> /ABS/PATH/ai-news-curator/logs/daily.log 2>&1
+```bash
+scripts/setup_daily_macos.sh
 ```
 
-Create `logs/` first. The computer must be on for a local cron run. The app's Run button works without a scheduler and uses the same deduplication rules.
+Setup prompts without echoing the key and writes a gitignored `.env` file with owner-only permissions. It installs `~/Library/LaunchAgents/com.aniket.ai-news-curator.plist` for **08:00 local time every day**. Check registration with `launchctl print gui/$(id -u)/com.aniket.ai-news-curator`. To trigger an immediate test, run `scripts/run_daily.sh`; read `logs/daily.stdout.log` and `logs/daily.stderr.log` for scheduled results. The Mac must be powered on; a scheduled launch missed during sleep runs after wake, while a launch missed when powered off waits for the next scheduled time. See [Apple's launchd scheduling guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/ScheduledJobs.html).
+
+The daily script analyzes at most **3 new items per topic and 20 in total** by default. Adjust `MAX_ITEMS_PER_TOPIC` and `MAX_TOTAL_ITEMS_PER_DAY` in `.env` for your project's quota. Topics least recently run get priority if the total cap is reached. The sidebar API key is session-only and does not reach the scheduler.
 
 ## Architecture
 

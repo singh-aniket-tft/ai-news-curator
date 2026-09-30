@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import zip_longest
 from typing import Protocol
 
 from .dedup import Embedder, LocalEmbedder, find_event_match
@@ -54,17 +55,19 @@ def run_topic(
     if max_items < 1 or max_items > 50:
         raise ValueError("max_items must be between 1 and 50")
     result = RunSummary(topic_id=topic_id)
-    collected: list[Candidate] = []
+    news: list[Candidate] = []
+    social: list[Candidate] = []
     if any(source != SourceType.SOCIAL.value for source in source_types):
         try:
-            collected.extend(news_search(topic, start_date, limit=max_items))
+            news = news_search(topic, start_date, limit=max_items)
         except Exception as exc:
             result.errors.append(f"News search: {exc}")
     if SourceType.SOCIAL.value in source_types:
         try:
-            collected.extend(social_search(topic, start_date, limit=min(max_items, 10)))
+            social = social_search(topic, start_date, limit=min(max_items, 10))
         except Exception as exc:
             result.errors.append(f"Social search: {exc}")
+    collected = [item for pair in zip_longest(news, social) for item in pair if item is not None]
     result.discovered = len(collected)
     if not collected:
         store.mark_run(topic_id)

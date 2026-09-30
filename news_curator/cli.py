@@ -23,6 +23,8 @@ def main() -> None:
     run = sub.add_parser("run", help="Run all saved active topics or one topic ID")
     run.add_argument("--topic-id", type=int)
     run.add_argument("--max-items", type=int, default=20)
+    run.add_argument("--max-total-items", type=int, default=20,
+                     help="Maximum VLM analyses across all topics in this invocation")
     sub.add_parser("list", help="List saved topics")
     args = parser.parse_args()
     store = Store(args.db)
@@ -39,12 +41,25 @@ def main() -> None:
         if not topics:
             print("No active topics found")
             return
+        if args.max_total_items < 1:
+            parser.error("--max-total-items must be positive")
+        topics.sort(key=lambda row: (row["last_run_at"] or "", row["id"]))
+        analyzed_total = 0
+        had_errors = False
         for row in topics:
+            remaining = args.max_total_items - analyzed_total
+            if remaining <= 0:
+                break
             summary = run_topic(
                 store, row["id"], row["keyword"], date.fromisoformat(row["start_date"]),
-                tuple(json.loads(row["source_types_json"])), args.max_items,
+                tuple(json.loads(row["source_types_json"])), min(args.max_items, remaining),
             )
+            analyzed_total += summary.analyzed
+            had_errors = had_errors or bool(summary.errors)
             print(json.dumps(summary.__dict__, indent=2))
+        print(f"Analyzed {analyzed_total}/{args.max_total_items} items across active topics")
+        if had_errors:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
